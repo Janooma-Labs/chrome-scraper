@@ -90,15 +90,14 @@ const DEFAULT_LINKEDIN_COLUMNS = [
 
 const DEFAULT_APNA_COLUMNS = [
   'name',
-  'title',
-  'location',
   'experience',
+  'location',
+  'education',
+  'preferredLocations',
   'phone',
   'email',
   'keywords',
-  'description',
-  'unlockCount',
-  'profileUrl'
+  'lastActive'
 ];
 
 const DEFAULT_GENERIC_COLUMNS = [

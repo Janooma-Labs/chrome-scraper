@@ -81,18 +81,22 @@
   }
 
   function getListContainer() {
-    // Find the main scroll container for profile cards
+    // Find the main container that holds all profile cards
+    // Look for div.css-qmeovh which contains all the cards
+    const mainContainer = document.querySelector('div.css-qmeovh');
+    if (mainContainer) return mainContainer;
+    
+    // Fallback: Look for any scrollable container with profile cards
     const candidates = [
       'div[class*="css-"]',
       'div[role="main"]',
       'main'
     ];
     
-    // Look for scrollable container with profile cards
     for (const selector of candidates) {
       const els = document.querySelectorAll(selector);
       for (const el of els) {
-        if (el.querySelector('button[id*=":r"]') && el.querySelector('div.css-d53uuf')) {
+        if (el.querySelector('div.css-1k5fup7')) {
           return el;
         }
       }
@@ -102,8 +106,8 @@
 
   function getProfileCards(container) {
     const scope = container || document;
-    // Profile cards are in divs with class css-d53uuf
-    const cards = Array.from(scope.querySelectorAll('div.css-d53uuf'));
+    // Profile cards have class MuiCard-root css-1k5fup7
+    const cards = Array.from(scope.querySelectorAll('div.MuiCard-root.css-1k5fup7'));
     return cards;
   }
 
@@ -161,102 +165,100 @@
   }
 
   function extractProfile(card, index) {
-    // Extract name - usually in a heading or prominent text
+    // Extract name - in h1.css-8wki2x
     let name = '';
-    const nameSelectors = [
-      'div.css-1xxiv2b p',
-      'div[class*="css-"] p:first-child',
-      'h1', 'h2', 'h3'
-    ];
-    
-    for (const sel of nameSelectors) {
-      name = extractTextFromElement(card, sel);
-      if (name && name.length > 0 && name.length < 100) break;
+    const nameEl = card.querySelector('h1.css-8wki2x');
+    if (nameEl) {
+      name = normalizeText(nameEl.textContent);
     }
 
-    // Extract experience/title
+    // Extract experience/title - looks for "Fresher" or experience in h5.css-1iiw76u
     let title = '';
-    const titleSelectors = [
-      'div.css-1xxiv2b p:nth-child(2)',
-      'div[class*="experience"]',
-      'div[class*="title"]'
-    ];
-    
-    for (const sel of titleSelectors) {
-      const text = extractTextFromElement(card, sel);
-      if (text && text !== name) {
-        title = text;
-        break;
+    let experience = '';
+    const h5Elements = card.querySelectorAll('h5.css-1iiw76u');
+    for (const h5 of h5Elements) {
+      const text = normalizeText(h5.textContent);
+      if (text && !text.includes('Education') && !text.includes('Location')) {
+        if (text.toLowerCase().includes('fresher') || text.match(/\d+\s*year/i)) {
+          experience = text;
+        } else if (!title) {
+          title = text;
+        }
       }
     }
 
-    // Extract location
+    // Extract location - h5 with location icon nearby
     let location = '';
-    const locationIcons = card.querySelectorAll('svg path[d*="M12"]');
-    for (const icon of locationIcons) {
-      const parent = icon.closest('div');
+    const locationSvgs = card.querySelectorAll('svg path[d*="M5.99935"]');
+    for (const svg of locationSvgs) {
+      const parent = svg.closest('div.css-15mtapa');
       if (parent) {
-        const text = extractTextFromElement(parent);
-        if (text && text.includes(',')) {
-          location = text;
+        const h5 = parent.querySelector('h5.css-1iiw76u');
+        if (h5) {
+          location = normalizeText(h5.textContent);
           break;
         }
       }
+    }
+
+    // Extract education
+    let education = '';
+    const educationDiv = card.querySelector('div.css-lblz1');
+    if (educationDiv) {
+      education = normalizeText(educationDiv.textContent);
+    }
+
+    // Extract preferred locations (chips)
+    const prefLocations = [];
+    const chips = card.querySelectorAll('div.MuiChip-root span.MuiChip-label div');
+    for (const chip of chips) {
+      const text = normalizeText(chip.textContent);
+      if (text) prefLocations.push(text);
+    }
+
+    // Extract phone button ID (for tracking)
+    let phoneButtonId = '';
+    const phoneBtn = card.querySelector('button[id*=":r"]');
+    if (phoneBtn) {
+      phoneButtonId = phoneBtn.id;
+    }
+
+    // Extract phone
+    const phone = extractPhoneFromButton(card);
+
+    // Extract last active date
+    let lastActive = '';
+    const activeEl = card.querySelector('div.css-3u2ksa');
+    if (activeEl && activeEl.textContent.includes('Active on')) {
+      lastActive = normalizeText(activeEl.textContent);
     }
 
     // Extract skills/keywords (highlighted text)
     const highlights = Array.from(card.querySelectorAll('span[style*="background-color:#FFEA92"]'));
     const keywords = highlights.map(h => normalizeText(h.textContent)).filter(Boolean);
 
-    // Extract description/summary
-    const descDiv = card.querySelector('div.css-f9spqm');
-    const description = descDiv ? extractTextFromElement(descDiv) : '';
-
-    // Extract phone
-    const phone = extractPhoneFromButton(card);
-
-    // Extract recruiter unlock count
-    let unlockCount = 0;
-    const unlockLabel = card.querySelector('div[aria-label*="recruiters have unlocked"]');
-    if (unlockLabel) {
-      const labelText = unlockLabel.getAttribute('aria-label');
-      const match = labelText ? labelText.match(/(\d+)\s+recruiter/) : null;
-      if (match) unlockCount = parseInt(match[1], 10);
-    }
-
-    // Extract profile URL if available
-    let profileUrl = '';
-    const profileLink = card.querySelector('a[href*="/profile/"]');
-    if (profileLink) {
-      profileUrl = profileLink.href;
-    }
-
-    // Try to extract additional info from the full profile text
+    // Extract full text for additional parsing
     const fullText = extractTextFromElement(card);
     
     // Extract email if present
     const emailMatch = fullText.match(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/);
     const email = emailMatch ? emailMatch[0] : '';
 
-    // Extract years of experience
-    const expMatch = fullText.match(/(\d+)\s*(?:\+\s*)?years?/i);
-    const experience = expMatch ? expMatch[1] + ' years' : '';
-
     // Create unique ID
-    const profileId = profileUrl || `apna_${index}_${Date.now()}`;
+    const profileId = phoneButtonId || `apna_${index}_${Date.now()}`;
 
     return {
       profileId,
       name: name || 'N/A',
       title: title || 'N/A',
-      location: location || 'N/A',
       experience: experience || 'N/A',
+      location: location || 'N/A',
+      education: education || 'N/A',
+      preferredLocations: prefLocations.join(', ') || 'N/A',
       phone: phone || 'N/A',
       email: email || 'N/A',
       keywords: keywords.join(', ') || 'N/A',
-      description: description || 'N/A',
-      unlockCount,
-      profileUrl: profileUrl || 'N/A',
+      lastActive: lastActive || 'N/A',
       fullText: fullText.substring(0, 500), // First 500 chars of full text
       capturedAt: new Date().toISOString(),
       searchPage: location.href
