@@ -2,8 +2,14 @@
 (function () {
   'use strict';
 
-  if (globalThis.__apnaCaptureLoaded) return;
+  console.log('[Apna Scraper] Script loaded!', location.href);
+
+  if (globalThis.__apnaCaptureLoaded) {
+    console.log('[Apna Scraper] Already loaded, skipping');
+    return;
+  }
   globalThis.__apnaCaptureLoaded = true;
+  console.log('[Apna Scraper] Initializing...');
 
   const STATE_KEY = '__apnaCaptureState';
 
@@ -421,19 +427,25 @@
   }
 
   if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.onMessage) {
+    console.log('[Apna Scraper] Setting up message listener');
     chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+      console.log('[Apna Scraper] Message received:', request.action);
       (async () => {
         try {
           if (request.action === 'apnaCaptureStart') {
+            console.log('[Apna Scraper] Start action triggered');
             await startCapture();
             sendResponse({ success: true });
           } else if (request.action === 'apnaCaptureStop') {
+            console.log('[Apna Scraper] Stop action triggered');
             await stopCapture();
             sendResponse({ success: true });
           } else if (request.action === 'apnaCaptureRefresh') {
+            console.log('[Apna Scraper] Refresh action triggered');
             await refreshCapture();
             sendResponse({ success: true });
           } else if (request.action === 'apnaCaptureClear') {
+            console.log('[Apna Scraper] Clear action triggered');
             await clearCapture();
             sendResponse({ success: true });
           } else if (request.action === 'apnaCaptureGetData') {
@@ -442,11 +454,14 @@
             sendResponse({ success: true, running: isRunning() });
           }
         } catch (error) {
+          console.error('[Apna Scraper] Error:', error);
           sendResponse({ success: false, error: error.message });
         }
       })();
       return true;
     });
+  } else {
+    console.warn('[Apna Scraper] Chrome runtime not available');
   }
 
   globalThis.apnaCapture = {
