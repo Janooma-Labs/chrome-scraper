@@ -231,22 +231,6 @@
         }
       }
     }
-      }
-    }
-
-    // Extract location - h5 with location icon nearby
-    let location = '';
-    const locationSvgs = card.querySelectorAll('svg path[d*="M5.99935"]');
-    for (const svg of locationSvgs) {
-      const parent = svg.closest('div.css-15mtapa');
-      if (parent) {
-        const h5 = parent.querySelector('h5.css-1iiw76u');
-        if (h5) {
-          location = normalizeText(h5.textContent);
-          break;
-        }
-      }
-    }
 
     // Extract education
     let education = '';
