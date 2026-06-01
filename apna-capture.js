@@ -197,6 +197,12 @@
       name = normalizeText(nameEl.textContent);
     }
 
+    if (index === 0) {
+      console.log('[Apna Scraper] Sample extraction (first card):');
+      console.log('  Name element:', nameEl);
+      console.log('  Name:', name);
+    }
+
     // Extract experience/title - looks for "Fresher" or experience in h5.css-1iiw76u
     let title = '';
     let experience = '';
@@ -311,14 +317,21 @@
     const st = state();
     if (!st.running) return;
 
+    console.log('[Apna Scraper] Running capture pass...');
+    
     const container = getListContainer();
-    if (!container) return;
+    if (!container) {
+      console.log('[Apna Scraper] No container found');
+      return;
+    }
 
     const cards = getProfileCards(container);
+    console.log('[Apna Scraper] Processing', cards.length, 'cards');
     let newCount = 0;
 
     // Extract phone numbers from scripts (if any)
     const scriptPhones = extractPhoneFromScript();
+    console.log('[Apna Scraper] Found', scriptPhones.length, 'phone numbers in scripts');
 
     for (let i = 0; i < cards.length; i++) {
       const card = cards[i];
@@ -338,6 +351,7 @@
       newCount++;
     }
 
+    console.log('[Apna Scraper] Captured', newCount, 'new profiles. Total:', st.captures.length);
     await sendUpdate();
   }
 
