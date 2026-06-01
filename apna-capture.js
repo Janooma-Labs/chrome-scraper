@@ -86,7 +86,7 @@
     const mainContainer = document.querySelector('div.css-qmeovh');
     if (mainContainer) return mainContainer;
     
-    // Fallback: Look for any scrollable container with profile cards
+    // Fallback: Look for any container with MuiCard-root cards
     const candidates = [
       'div[class*="css-"]',
       'div[role="main"]',
@@ -96,7 +96,9 @@
     for (const selector of candidates) {
       const els = document.querySelectorAll(selector);
       for (const el of els) {
-        if (el.querySelector('div.css-1k5fup7')) {
+        if (el.querySelector('div.MuiCard-root.css-1tv8qms') || 
+            el.querySelector('div.MuiCard-root.css-1k5fup7') ||
+            el.querySelector('div.MuiCard-root')) {
           return el;
         }
       }
@@ -106,9 +108,26 @@
 
   function getProfileCards(container) {
     const scope = container || document;
-    // Profile cards have class MuiCard-root css-1k5fup7
-    const cards = Array.from(scope.querySelectorAll('div.MuiCard-root.css-1k5fup7'));
-    return cards;
+    
+    // Try multiple selectors in order of specificity
+    const selectors = [
+      'div.MuiCard-root.css-1tv8qms',  // Primary selector
+      'div.MuiCard-root.css-1k5fup7',  // Fallback 1
+      'div.css-qmeovh div.MuiCard-root',  // Fallback 2: any card in main container
+      'div.MuiCard-root',  // Fallback 3: any card at all
+      'div.MuiPaper-root.MuiCard-root'  // Fallback 4: full MUI class
+    ];
+    
+    for (const selector of selectors) {
+      const cards = Array.from(scope.querySelectorAll(selector));
+      if (cards.length > 0) {
+        console.log(`[Apna Scraper] Found ${cards.length} cards using selector: ${selector}`);
+        return cards;
+      }
+    }
+    
+    console.log('[Apna Scraper] No cards found with any selector');
+    return [];
   }
 
   function extractTextFromElement(el, selector) {
@@ -333,13 +352,28 @@
     const st = state();
     if (st.running) return;
 
+    console.log('[Apna Scraper] Starting capture...');
+    console.log('[Apna Scraper] Current URL:', location.href);
+    
     // Remove strict page check - just try to find cards
     const container = getListContainer();
+    console.log('[Apna Scraper] Container found:', container ? 'Yes' : 'No');
+    
     const testCards = getProfileCards(container);
+    console.log('[Apna Scraper] Cards found:', testCards.length);
     
     if (!testCards || testCards.length === 0) {
-      alert('No Apna profile cards found on this page. Please make sure you are on the employer.apna.co search results page with candidate profiles visible.');
-      return;
+      // Try waiting a bit for page to load
+      console.log('[Apna Scraper] No cards found immediately, waiting 2 seconds...');
+      await new Promise(resolve => setTimeout(resolve, 2000));
+      
+      const retryCards = getProfileCards(container);
+      console.log('[Apna Scraper] Cards after wait:', retryCards.length);
+      
+      if (!retryCards || retryCards.length === 0) {
+        alert('No Apna profile cards found on this page. Please make sure you are on the employer.apna.co search results page with candidate profiles visible.');
+        return;
+      }
     }
 
     st.running = true;
