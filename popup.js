@@ -686,14 +686,20 @@ async function sendPlacesAction(action) {
 
   if (elements.scraperType.value === 'apna') {
     try {
+      console.log('[Popup] Injecting apna-capture.js into tab', tab.id);
       await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['apna-capture.js'] });
+      console.log('[Popup] Script injected, waiting 500ms...');
+      await new Promise(resolve => setTimeout(resolve, 500));
+      console.log('[Popup] Sending message:', action);
       const resApna = await chrome.tabs.sendMessage(tab.id, { action });
+      console.log('[Popup] Response received:', resApna);
       if (resApna && resApna.error) {
         setStatus(`${cfg.label} error: ` + resApna.error, 'error');
         return null;
       }
       return resApna;
     } catch (err) {
+      console.error('[Popup] Error with Apna capture:', err);
       setStatus('Unable to reach page for Apna capture. Refresh and retry.', 'error');
       return null;
     }
