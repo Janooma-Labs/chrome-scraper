@@ -8,7 +8,8 @@
   const STATE_KEY = '__apnaCaptureState';
 
   function isApnaPage() {
-    return location.hostname.includes('apna.co') && location.pathname.includes('/search');
+    // Allow any employer.apna.co page
+    return location.hostname.includes('apna.co');
   }
 
   function defaultState() {
