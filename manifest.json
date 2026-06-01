@@ -1,0 +1,39 @@
+{
+  "manifest_version": 3,
+  "name": "JANOOMA DATA SCRAPPER",
+  "version": "0.0.5",
+  "description": "Scrape structured data from any web page and export as JSON, CSV, or XLSX.",
+  "permissions": [
+    "activeTab",
+    "scripting",
+    "downloads",
+    "storage"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icon16.png",
+      "48": "icon48.png",
+      "128": "icon128.png"
+    }
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["picker.js", "google-places-capture.js", "bing-places-capture.js", "generic-capture.js", "linkedin-capture.js"],
+      "css": ["picker.css"],
+      "run_at": "document_idle"
+    }
+  ],
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  }
+}

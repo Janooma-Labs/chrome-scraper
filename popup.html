@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Page Scraper</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="header-row">
+        <div class="header-select-wrap">
+          <select id="scraper-type">
+            <option value="google_places" selected>Google Places</option>
+            <option value="bing_places">Bing Places</option>
+            <option value="linkedin">LinkedIn Scrapper</option>
+            <option value="generic">Generic Scraper</option>
+          </select>
+        </div>
+        <div class="window-controls">
+          <button id="minimize-btn" class="window-btn" title="Minimize">-</button>
+          <button id="maximize-btn" class="window-btn" title="Maximize">[]</button>
+          <button id="close-btn" class="window-btn danger" title="Close">x</button>
+        </div>
+      </div>
+    </header>
+
+    <section id="google-panel">
+      <div class="google-top-line">
+        <span id="google-running-badge" class="badge stopped">Stopped</span>
+        <span id="google-records-count" class="meta-chip">0 records</span>
+        <span id="google-inline-status" class="inline-status"></span>
+        <button id="google-columns-btn" class="icon-btn" title="Choose columns" aria-label="Choose columns">☰ Columns</button>
+        <button id="google-columns-reset" class="icon-btn" title="Reset columns" aria-label="Reset columns">↺ Reset</button>
+      </div>
+      <p id="places-helper" class="helper-text">Open Google Maps search results, then start capture and scroll to collect more places.</p>
+      <div class="google-toolbar">
+        <div class="icon-row">
+          <button id="google-start-btn" class="icon-btn" title="Start Capture" aria-label="Start Capture">▶ Start</button>
+          <button id="google-stop-btn" class="icon-btn" title="Stop Capture" aria-label="Stop Capture" disabled>■ Stop</button>
+          <button id="google-refresh-btn" class="icon-btn" title="Refresh Data" aria-label="Refresh Data">⟳ Refresh</button>
+          <button id="google-clear-btn" class="icon-btn danger" title="Clear Data" aria-label="Clear Data">⌫ Clear</button>
+          <button id="google-export-json" class="icon-btn export" title="Export JSON" aria-label="Export JSON">⬇ JSON</button>
+          <button id="google-export-csv" class="icon-btn export" title="Export CSV" aria-label="Export CSV">⬇ CSV</button>
+          <button id="google-export-xlsx" class="icon-btn export" title="Export XLSX" aria-label="Export XLSX">⬇ XLSX</button>
+        </div>
+      </div>
+      <div id="google-columns-panel" class="columns-panel hidden">
+        <div id="google-columns-list" class="columns-list"></div>
+      </div>
+    </section>
+
+    <section id="generic-panel" class="hidden">
+      <section class="mode-section">
+        <label class="section-label">Selection Mode</label>
+        <div class="radio-group">
+          <label class="radio-label">
+            <input type="radio" name="mode" value="fullpage" checked>
+            <span>Full Page</span>
+          </label>
+          <label class="radio-label">
+            <input type="radio" name="mode" value="click">
+            <span>Click on page element</span>
+          </label>
+          <label class="radio-label">
+            <input type="radio" name="mode" value="xpath">
+            <span>Enter XPath</span>
+          </label>
+        </div>
+      </section>
+
+      <section id="xpath-section" class="hidden">
+        <label class="section-label" for="xpath-input">XPath Expression</label>
+        <input type="text" id="xpath-input" placeholder="//div[@class='content']">
+      </section>
+
+      <section class="actions">
+        <button id="scrape-btn" class="btn primary">Scrape & Preview</button>
+        <button id="pick-btn" class="btn secondary hidden">Pick Element</button>
+        <button id="cancel-pick-btn" class="btn danger hidden">Cancel</button>
+      </section>
+    </section>
+
+    <section id="status-section" class="hidden">
+      <p id="status-text"></p>
+    </section>
+
+    <section id="preview-section" class="hidden">
+      <div class="preview-head">
+        <label class="section-label">Preview (<span id="preview-count">0</span> items)</label>
+        <button id="raw-toggle-btn" class="icon-btn" title="Toggle raw JSON" aria-label="Toggle raw JSON">&lt;/&gt; Raw</button>
+      </div>
+      <div id="preview-table-wrap" class="hidden">
+        <div class="table-scroll">
+          <table id="preview-table"></table>
+        </div>
+      </div>
+      <pre id="preview-content" class="hidden"></pre>
+    </section>
+
+    <section id="export-section" class="export-section">
+      <label class="section-label">Export Format</label>
+      <div class="export-buttons">
+        <button id="export-json" class="btn export" disabled>JSON</button>
+        <button id="export-csv" class="btn export" disabled>CSV</button>
+        <button id="export-xlsx" class="btn export" disabled>XLSX</button>
+      </div>
+    </section>
+
+    <footer>
+      <p>Items found: <span id="count-badge">0</span></p>
+    </footer>
+  </div>
+
+  <script src="xlsx-writer.js"></script>
+  <script src="popup.js"></script>
+</body>
+</html>
