@@ -684,6 +684,21 @@ async function sendPlacesAction(action) {
     }
   }
 
+  if (elements.scraperType.value === 'apna') {
+    try {
+      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['apna-capture.js'] });
+      const resApna = await chrome.tabs.sendMessage(tab.id, { action });
+      if (resApna && resApna.error) {
+        setStatus(`${cfg.label} error: ` + resApna.error, 'error');
+        return null;
+      }
+      return resApna;
+    } catch (err) {
+      setStatus('Unable to reach page for Apna capture. Refresh and retry.', 'error');
+      return null;
+    }
+  }
+
   if (!tab.url || !tab.url.includes('/maps')) {
     setStatus(`Open ${cfg.label} search results tab first.`, 'error');
     return null;
