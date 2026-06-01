@@ -333,15 +333,18 @@
     const st = state();
     if (st.running) return;
 
-    if (!isApnaPage()) {
-      alert('Please navigate to Apna search results page first.');
+    // Remove strict page check - just try to find cards
+    const container = getListContainer();
+    const testCards = getProfileCards(container);
+    
+    if (!testCards || testCards.length === 0) {
+      alert('No Apna profile cards found on this page. Please make sure you are on the employer.apna.co search results page with candidate profiles visible.');
       return;
     }
 
     st.running = true;
     await sendUpdate();
 
-    const container = getListContainer();
     if (container) {
       attachAutoCaptureListeners(container);
     }
