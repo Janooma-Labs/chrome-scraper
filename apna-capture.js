@@ -357,14 +357,16 @@
 
   async function sendUpdate() {
     const st = state();
-    if (typeof chrome !== 'undefined' && chrome.runtime && chrome.runtime.sendMessage) {
+    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.local) {
       try {
-        await chrome.runtime.sendMessage({
-          action: 'apnaCaptureUpdate',
-          data: st.captures,
-          running: st.running
+        await chrome.storage.local.set({
+          apnaCapturedData: st.captures,
+          apnaCaptureRunning: st.running,
+          apnaUpdatedAt: Date.now()
         });
-      } catch (_) {}
+      } catch (err) {
+        console.error('[Apna Scraper] Error saving to storage:', err);
+      }
     }
   }
 
