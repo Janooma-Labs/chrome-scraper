@@ -88,6 +88,19 @@ const DEFAULT_LINKEDIN_COLUMNS = [
   'description'
 ];
 
+const DEFAULT_APNA_COLUMNS = [
+  'name',
+  'title',
+  'location',
+  'experience',
+  'phone',
+  'email',
+  'keywords',
+  'description',
+  'unlockCount',
+  'profileUrl'
+];
+
 const DEFAULT_GENERIC_COLUMNS = [
   'type',
   'text',
@@ -101,12 +114,13 @@ const DEFAULT_GENERIC_COLUMNS = [
 function getDefaultPlacesColumns() {
   if (elements.scraperType.value === 'linkedin') return DEFAULT_LINKEDIN_COLUMNS;
   if (elements.scraperType.value === 'bing_places') return DEFAULT_BING_COLUMNS;
+  if (elements.scraperType.value === 'apna') return DEFAULT_APNA_COLUMNS;
   if (elements.scraperType.value === 'generic') return DEFAULT_GENERIC_COLUMNS;
   return DEFAULT_GOOGLE_COLUMNS;
 }
 
 function isCaptureMode() {
-  return isPlacesMode() || elements.scraperType.value === 'generic' || elements.scraperType.value === 'linkedin';
+  return isPlacesMode() || elements.scraperType.value === 'generic' || elements.scraperType.value === 'linkedin' || elements.scraperType.value === 'apna';
 }
 
 function isPlacesMode() {
@@ -128,6 +142,23 @@ function getPlacesConfig() {
         clear: 'linkedinCaptureClear'
       },
       helperText: 'Open LinkedIn company search results, start capture, and scroll or paginate. Capture continues automatically.'
+    };
+  }
+
+  if (elements.scraperType.value === 'apna') {
+    return {
+      label: 'Apna Profiles',
+      dataKey: 'apnaCapturedData',
+      runningKey: 'apnaCaptureRunning',
+      searchTermKey: 'apnaSearchTerm',
+      scriptFile: 'apna-capture.js',
+      actions: {
+        start: 'apnaCaptureStart',
+        stop: 'apnaCaptureStop',
+        refresh: 'apnaCaptureRefresh',
+        clear: 'apnaCaptureClear'
+      },
+      helperText: 'Open Apna employer search results, start capture, and scroll to collect candidate profiles with phone numbers.'
     };
   }
 

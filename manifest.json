@@ -26,7 +26,7 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["picker.js", "google-places-capture.js", "bing-places-capture.js", "generic-capture.js", "linkedin-capture.js"],
+      "js": ["picker.js", "google-places-capture.js", "bing-places-capture.js", "generic-capture.js", "linkedin-capture.js", "apna-capture.js"],
       "css": ["picker.css"],
       "run_at": "document_idle"
     }
