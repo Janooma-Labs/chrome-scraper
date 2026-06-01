@@ -203,10 +203,10 @@
       console.log('  Name:', name);
     }
 
-    // Extract experience/title - looks for "Fresher" or experience in h5.css-1iiw76u
+    // Extract experience/title - looks for "Fresher" or experience in h5
     let title = '';
     let experience = '';
-    const h5Elements = card.querySelectorAll('h5.css-1iiw76u');
+    const h5Elements = card.querySelectorAll('h5.css-8wri2g, h5.css-1iiw76u, h5');
     for (const h5 of h5Elements) {
       const text = normalizeText(h5.textContent);
       if (text && !text.includes('Education') && !text.includes('Location')) {
@@ -215,6 +215,22 @@
         } else if (!title) {
           title = text;
         }
+      }
+    }
+
+    // Extract location - h5 with location icon nearby
+    let location = '';
+    const locationSvgs = card.querySelectorAll('svg path[d*="M5.99935"]');
+    for (const svg of locationSvgs) {
+      const parent = svg.closest('div.css-15mtapa, div.css-3u2ksa');
+      if (parent) {
+        const h5 = parent.querySelector('h5.css-8wri2g, h5.css-1iiw76u, h5');
+        if (h5) {
+          location = normalizeText(h5.textContent);
+          break;
+        }
+      }
+    }
       }
     }
 
