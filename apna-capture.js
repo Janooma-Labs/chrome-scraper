@@ -368,6 +368,11 @@
         console.error('[Apna Scraper] Error saving to storage:', err);
       }
     }
+    chrome.runtime.sendMessage({ action: 'capturedDataUpdated', source: 'apna', total: st.captures.length }, () => {
+      if (chrome.runtime.lastError) {
+        // ignore — popup may be closed
+      }
+    });
   }
 
   async function startCapture() {

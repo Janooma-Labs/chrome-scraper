@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "JANOOMA DATA SCRAPPER",
-  "version": "0.0.5",
+  "version": "0.0.7",
   "description": "Scrape structured data from any web page and export as JSON, CSV, or XLSX.",
   "permissions": [
     "activeTab",
@@ -26,7 +26,7 @@
   "content_scripts": [
     {
       "matches": ["<all_urls>"],
-      "js": ["picker.js", "google-places-capture.js", "bing-places-capture.js", "generic-capture.js", "linkedin-capture.js", "apna-capture.js"],
+      "js": ["picker.js", "google-places-capture.js", "bing-places-capture.js", "generic-capture.js", "linkedin-capture.js", "apna-capture.js", "search-listing-capture.js"],
       "css": ["picker.css"],
       "run_at": "document_idle"
     }

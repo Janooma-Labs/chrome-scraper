@@ -5,10 +5,82 @@
   if (globalThis.__placesCaptureLoaded) return;
   globalThis.__placesCaptureLoaded = true;
 
+  // IndexedDB is origin-scoped. Content scripts run on the web page origin, so they
+  // cannot share an IndexedDB with the popup (chrome-extension:// origin). Route all
+  // PlacesDB operations through the extension's background service worker instead.
+  const PlacesDB = {
+    async getAll() {
+      const res = await chrome.runtime.sendMessage({ action: 'placesDB_getAll' });
+      if (res && res.error) throw new Error(res.error);
+      return res.rows || [];
+    },
+    async count() {
+      const res = await chrome.runtime.sendMessage({ action: 'placesDB_count' });
+      if (res && res.error) throw new Error(res.error);
+      return res.count || 0;
+    },
+    async save(rows) {
+      const res = await chrome.runtime.sendMessage({ action: 'placesDB_save', rows });
+      if (res && res.error) throw new Error(res.error);
+      return { total: res.total || 0, added: res.added || 0, updated: res.updated || 0 };
+    },
+    async clear() {
+      const res = await chrome.runtime.sendMessage({ action: 'placesDB_clear' });
+      if (res && res.error) throw new Error(res.error);
+      return true;
+    }
+  };
+
   const STATE_KEY = '__placesCaptureState';
 
   function isGoogleMapsPage() {
     return location.hostname.includes('google.') && location.pathname.includes('/maps');
+  }
+
+  function isGoogleChallengePage() {
+    const url = location.href.toLowerCase();
+    const title = document.title.toLowerCase();
+    return url.includes('/sorry') ||
+      url.includes('/sorry/index') ||
+      title.includes('sorry') ||
+      title.includes('unusual traffic') ||
+      !!document.querySelector('form[action*="/sorry"]') ||
+      !!document.getElementById('captcha') ||
+      !!document.querySelector('iframe[src*="recaptcha"], iframe[src*="google.com/recaptcha"]');
+  }
+
+  async function pauseForChallenge(reason) {
+    const st = state();
+    st.automationRunning = false;
+    stopAutomationTimers();
+
+    const queue = await loadAutomationQueue();
+    if (queue) {
+      queue.running = false;
+      queue.challengeDetected = true;
+      await saveAutomationQueue(queue);
+    }
+    await chrome.storage.local.set({ googlePlacesRunning: false, googlePlacesUpdatedAt: Date.now() });
+
+    let records = 0;
+    try { records = await PlacesDB.count(); } catch (_) {}
+
+    let progress;
+    if (queue && queue.combinations && queue.combinations.length) {
+      const current = queue.currentIndex + 1;
+      const total = queue.combinations.length;
+      const percent = total ? Math.round((queue.currentIndex / total) * 100) : 0;
+      progress = { current, total, percent, records, status: `Paused: ${reason} — complete the challenge, then click Resume` };
+    } else {
+      progress = { current: 0, total: 0, percent: 0, records, status: `Paused: ${reason} — complete the challenge, then click Resume` };
+    }
+    await chrome.storage.local.set({ googlePlacesProgress: progress });
+    chrome.runtime.sendMessage({ action: 'googlePlacesProgressUpdated', progress }, () => {
+      if (chrome.runtime.lastError) {}
+    });
+    chrome.runtime.sendMessage({ action: 'googlePlacesChallengeDetected', reason }, () => {
+      if (chrome.runtime.lastError) {}
+    });
   }
 
   function defaultState() {
@@ -151,8 +223,8 @@
   }
 
   function getCards(container) {
-    const scope = container || document;
-    const links = Array.from(scope.querySelectorAll('a[href*="/maps/place/"]'));
+    if (!container) return [];
+    const links = Array.from(container.querySelectorAll('a[href*="/maps/place/"]'));
     const cards = [];
     const seen = new Set();
     for (const link of links) {
@@ -371,39 +443,50 @@
   }
 
   async function persistCapture(items) {
-    const existing = await chrome.storage.local.get(['googlePlacesData']);
-    const prev = Array.isArray(existing.googlePlacesData) ? existing.googlePlacesData : [];
-
-    const byKey = new Map();
-    for (const row of prev) {
-      const key = placeKey(row);
-      if (key) byKey.set(key, row);
-    }
-
-    let added = 0;
-    let updated = 0;
-    for (const item of items) {
-      const key = placeKey(item);
-      if (!key) continue;
-      const current = byKey.get(key);
-      if (!current) {
-        byKey.set(key, item);
-        added += 1;
-      } else {
-        const mergedItem = mergePreferNew(current, item);
-        if (JSON.stringify(mergedItem) !== JSON.stringify(current)) {
-          byKey.set(key, mergedItem);
-          updated += 1;
-        }
+    if (!Array.isArray(items) || !items.length) {
+      try {
+        const total = await PlacesDB.count();
+        return { total, added: 0, updated: 0 };
+      } catch (_) {
+        return { total: 0, added: 0, updated: 0 };
       }
     }
 
-    const merged = Array.from(byKey.values());
-    await chrome.storage.local.set({
-      googlePlacesData: merged,
-      googlePlacesUpdatedAt: Date.now()
-    });
-    return { total: merged.length, added, updated };
+    try {
+      // Merge into existing records in the extension-origin DB so we keep the
+      // Google-specific merging behaviour (better website, address, category).
+      const existing = await PlacesDB.getAll();
+      const mergedMap = new Map();
+      for (const row of existing) {
+        const key = placeKey(row);
+        if (key) mergedMap.set(key, row);
+      }
+
+      let added = 0;
+      let updated = 0;
+      for (const item of items) {
+        const key = placeKey(item);
+        if (!key) continue;
+        const old = mergedMap.get(key);
+        if (old) {
+          const merged = mergePreferNew(old, item);
+          if (JSON.stringify(merged) !== JSON.stringify(old)) {
+            updated += 1;
+          }
+          mergedMap.set(key, merged);
+        } else {
+          mergedMap.set(key, item);
+          added += 1;
+        }
+      }
+
+      const mergedItems = Array.from(mergedMap.values());
+      const res = await PlacesDB.save(mergedItems);
+      return { total: res.total, added, updated };
+    } catch (err) {
+      console.warn('[GooglePlaces] persist failed', err);
+      return { total: 0, added: 0, updated: 0 };
+    }
   }
 
   async function runCapturePass() {
@@ -438,8 +521,9 @@
       added = persisted.added;
       updated = persisted.updated;
     } else {
-      const existing = await chrome.storage.local.get(['googlePlacesData']);
-      total = Array.isArray(existing.googlePlacesData) ? existing.googlePlacesData.length : 0;
+      let records = 0;
+      try { records = await PlacesDB.count(); } catch (_) {}
+      total = records;
     }
 
     if (container) {
@@ -451,43 +535,484 @@
       await chrome.storage.local.set({ googlePlacesSearchTerm: searchTerm });
     }
 
+    chrome.runtime.sendMessage({ action: 'capturedDataUpdated', source: 'google_places', total, added, updated }, () => {
+      if (chrome.runtime.lastError) {
+        // ignore — popup may be closed
+      }
+    });
+
     return { added, updated, total, searchTerm };
   }
 
-  async function startCapture() {
-    const st = state();
-    if (st.running) {
-      const existing = await chrome.storage.local.get(['googlePlacesData']);
-      return { running: true, total: Array.isArray(existing.googlePlacesData) ? existing.googlePlacesData.length : 0 };
-    }
-    st.running = true;
-    await chrome.storage.local.set({ googlePlacesRunning: true, googlePlacesUpdatedAt: Date.now() });
+  /* ----------------- Multi-location automation ----------------- */
 
-    await runCapturePass();
-    attachAutoCaptureListeners(getListContainer());
-    st.timerId = setInterval(() => {
-      runCapturePass().catch(() => {});
-    }, 1500);
-
-    const existing = await chrome.storage.local.get(['googlePlacesData']);
-    return { running: true, total: Array.isArray(existing.googlePlacesData) ? existing.googlePlacesData.length : 0 };
+  function buildGoogleMapsSearchUrl(keyword, location) {
+    const query = normalizeText(`${keyword} ${location}`);
+    return `https://www.google.com/maps/search/${encodeURIComponent(query)}`;
   }
 
-  async function stopCapture() {
+  function extractMapsSearchTerm(urlString) {
+    try {
+      const url = new URL(urlString, location.href);
+      const q = normalizeText(url.searchParams.get('q'));
+      if (q) return q;
+      const pathMatch = url.pathname.match(/\/maps\/search\/([^/]+)/i);
+      if (pathMatch && pathMatch[1]) {
+        return normalizeText(decodeURIComponent(pathMatch[1].replace(/\+/g, ' ')));
+      }
+      return '';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  function isOnExpectedSearchUrl(expectedUrl) {
+    if (!expectedUrl) return false;
+    const currentTerm = extractMapsSearchTerm(window.location.href);
+    const expectedTerm = extractMapsSearchTerm(expectedUrl);
+    return currentTerm && expectedTerm && currentTerm === expectedTerm;
+  }
+
+  async function waitForSearchResults(timeoutMs = 15000) {
+    return new Promise((resolve) => {
+      let elapsed = 0;
+      const interval = 400;
+      const startHref = location.href;
+      const timer = setInterval(() => {
+        elapsed += interval;
+        const container = getListContainer();
+        const cards = container ? getCards(container).length : 0;
+        if (cards > 0) {
+          clearInterval(timer);
+          resolve(true);
+        } else if (elapsed >= timeoutMs || location.href !== startHref) {
+          clearInterval(timer);
+          resolve(false);
+        }
+      }, interval);
+    });
+  }
+
+  async function loadAutomationQueue() {
+    try {
+      const res = await chrome.storage.local.get(['googlePlacesAutomationQueue']);
+      return res.googlePlacesAutomationQueue || null;
+    } catch (err) {
+      console.warn('[GooglePlacesAutomation] load queue failed', err);
+      return null;
+    }
+  }
+
+  async function saveAutomationQueue(queue) {
+    try {
+      await chrome.storage.local.set({ googlePlacesAutomationQueue: queue });
+    } catch (err) {
+      console.warn('[GooglePlacesAutomation] save queue failed', err);
+    }
+  }
+
+  async function sendProgressUpdate(queue, records, statusExtra) {
+    if (!queue || !queue.combinations || !queue.combinations.length) return;
+    const current = queue.currentIndex + 1;
+    const total = queue.combinations.length;
+    const percent = total ? Math.round(((queue.currentIndex) / total) * 100) : 0;
+    const item = queue.combinations[queue.currentIndex];
+    const status = item
+      ? `Scraping "${item.keyword}" in ${item.location}${statusExtra ? ` — ${statusExtra}` : ''}`
+      : 'Finishing...';
+    const progress = { current, total, percent, records, status };
+    await chrome.storage.local.set({ googlePlacesProgress: progress });
+    chrome.runtime.sendMessage({ action: 'googlePlacesProgressUpdated', progress }, () => {
+      if (chrome.runtime.lastError) {}
+    });
+  }
+
+  function stopAutomationTimers() {
     const st = state();
-    st.running = false;
-    if (st.timerId) {
-      clearInterval(st.timerId);
-      st.timerId = null;
+    if (st.automationTimer) {
+      clearTimeout(st.automationTimer);
+      st.automationTimer = null;
     }
     if (st.passTimerId) {
       clearTimeout(st.passTimerId);
       st.passTimerId = null;
     }
     detachAutoCaptureListeners();
+  }
+
+  async function runCapturePassNoScroll() {
+    if (!isGoogleMapsPage()) {
+      return { added: 0, updated: 0, total: 0 };
+    }
+    const container = getListContainer();
+    const cards = getCards(container);
+    const st = state();
+    const batch = [];
+    const seenInPass = new Set();
+
+    for (const card of cards) {
+      const place = buildPlace(card);
+      const dedupeKey = placeKey(place);
+      if (!dedupeKey) continue;
+      if (seenInPass.has(dedupeKey)) continue;
+      seenInPass.add(dedupeKey);
+      st.seenIds.add(dedupeKey);
+      batch.push(place);
+      st.captures.push(place);
+    }
+
+    let total = 0;
+    let added = 0;
+    let updated = 0;
+    if (batch.length > 0) {
+      const persisted = await persistCapture(batch);
+      total = persisted.total;
+      added = persisted.added;
+      updated = persisted.updated;
+    } else {
+      let records = 0;
+      try { records = await PlacesDB.count(); } catch (_) {}
+      total = records;
+    }
+
+    const searchTerm = getCurrentSearchTerm();
+    if (searchTerm) {
+      await chrome.storage.local.set({ googlePlacesSearchTerm: searchTerm });
+    }
+
+    return { added, updated, total, searchTerm };
+  }
+
+  async function captureAndScrollCurrentSearch() {
+    const st = state();
+    if (!st.automationRunning) return;
+
+    let queue = await loadAutomationQueue();
+    if (!queue || !queue.running) {
+      st.automationRunning = false;
+      return;
+    }
+
+    let noNewCount = 0;
+    let lastScrollTop = -1;
+    let lastTotal = -1;
+    let lastAdded = -1;
+    let attempts = 0;
+    const MAX_ATTEMPTS = 120;
+
+    const loop = async () => {
+      if (!st.automationRunning) return;
+      if (isGoogleChallengePage()) {
+        await pauseForChallenge('Google bot challenge detected');
+        return;
+      }
+      if (location.pathname.includes('/maps/place/')) {
+        await finishCurrentAndAdvance(queue, 'redirected to place detail while scrolling - skipping');
+        return;
+      }
+      queue = await loadAutomationQueue();
+      if (!queue || !queue.running) {
+        st.automationRunning = false;
+        return;
+      }
+
+      attempts += 1;
+      if (attempts > MAX_ATTEMPTS) {
+        // Safety cap: move to next location after many attempts
+        await finishCurrentAndAdvance(queue, 'max attempts reached');
+        return;
+      }
+
+      const container = getListContainer();
+
+      const res = await runCapturePassNoScroll();
+      const afterTotal = res.total;
+      for (let i = 0; i < res.added; i++) st.captures.push({}); // approximate count sync
+
+      await sendProgressUpdate(queue, afterTotal, 'scrolling');
+      chrome.runtime.sendMessage({ action: 'capturedDataUpdated', source: 'google_places', total: afterTotal, added: res.added, updated: res.updated }, () => {
+        if (chrome.runtime.lastError) {}
+      });
+
+      const newThisPass = res.added || 0;
+      const currentScrollTop = container ? container.scrollTop : 0;
+      const reachedBottom = container && (container.scrollHeight - currentScrollTop - container.clientHeight <= 80);
+
+      if (newThisPass === 0 && reachedBottom && currentScrollTop === lastScrollTop) {
+        noNewCount += 1;
+      } else {
+        noNewCount = 0;
+      }
+
+      const bottomSettled = noNewCount >= 2;
+      const noNewAndStationary = newThisPass === 0 && currentScrollTop === lastScrollTop && lastTotal === afterTotal && attempts > 1;
+
+      if (bottomSettled || noNewAndStationary) {
+        await finishCurrentAndAdvance(queue, 'end of results');
+        return;
+      }
+
+      lastScrollTop = currentScrollTop;
+      lastTotal = afterTotal;
+      lastAdded = newThisPass;
+
+      if (container) {
+        container.scrollTop += Math.max(500, Math.floor(container.clientHeight * 0.75));
+      }
+
+      st.automationTimer = setTimeout(loop, 1200);
+    };
+
+    loop();
+  }
+
+  async function finishCurrentAndAdvance(queue, reason) {
+    const st = state();
+    stopAutomationTimers();
+
+    // Re-read queue and respect a Stop that may have been issued while we were scrolling.
+    const freshQueue = await loadAutomationQueue();
+    if (!freshQueue || !freshQueue.running) {
+      st.automationRunning = false;
+      if (freshQueue) {
+        freshQueue.running = false;
+        await saveAutomationQueue(freshQueue);
+      }
+      await chrome.storage.local.set({ googlePlacesRunning: false, googlePlacesUpdatedAt: Date.now() });
+      return;
+    }
+    queue = freshQueue;
+
+    queue.currentIndex += 1;
+    queue.currentSearchUrl = null;
+    await saveAutomationQueue(queue);
+
+    if (queue.currentIndex >= queue.combinations.length) {
+      queue.running = false;
+      await saveAutomationQueue(queue);
+      await chrome.storage.local.set({ googlePlacesRunning: false, googlePlacesUpdatedAt: Date.now() });
+      let records = 0;
+      try { records = await PlacesDB.count(); } catch (_) {}
+      await sendProgressUpdate(queue, records, 'completed');
+      chrome.runtime.sendMessage({ action: 'automationComplete', source: 'google_places' }, () => {
+        if (chrome.runtime.lastError) {}
+      });
+      st.automationRunning = false;
+      return;
+    }
+
+    const next = queue.combinations[queue.currentIndex];
+
+    // Final stop check right before moving to next combination.
+    const justBeforeNav = await loadAutomationQueue();
+    if (!justBeforeNav || !justBeforeNav.running) {
+      st.automationRunning = false;
+      if (justBeforeNav) {
+        justBeforeNav.running = false;
+        await saveAutomationQueue(justBeforeNav);
+      }
+      await chrome.storage.local.set({ googlePlacesRunning: false, googlePlacesUpdatedAt: Date.now() });
+      return;
+    }
+
+    const nextUrl = buildGoogleMapsSearchUrl(next.keyword, next.location);
+    queue.currentSearchUrl = nextUrl;
+    await saveAutomationQueue(queue);
+
+    let records = 0;
+    try { records = await PlacesDB.count(); } catch (_) {}
+    await sendProgressUpdate(queue, records, `moving to ${next.location}`);
+
+    // Navigate by URL after a short pause so the user can hit Stop and to reduce bot flags.
+    st.automationTimer = setTimeout(async () => {
+      if (!st.automationRunning) return;
+      const fresh = await loadAutomationQueue();
+      if (!fresh || !fresh.running) {
+        st.automationRunning = false;
+        await chrome.storage.local.set({ googlePlacesRunning: false });
+        return;
+      }
+      window.location.href = nextUrl;
+    }, 2000);
+  }
+
+  async function startAutomation(navigationOnly = false) {
+    const st = state();
+    let queue = await loadAutomationQueue();
+    if (!queue || !queue.combinations || !queue.combinations.length) {
+      return { error: 'No automation queue found. Start from the popup.' };
+    }
+
+    if (isGoogleChallengePage()) {
+      await pauseForChallenge('Google bot challenge detected');
+      return { running: false, message: 'Paused for challenge' };
+    }
+
+    queue.running = true;
+    st.automationRunning = true;
+    await saveAutomationQueue(queue);
+    await chrome.storage.local.set({ googlePlacesRunning: true, googlePlacesUpdatedAt: Date.now() });
+
+    if (queue.currentIndex >= queue.combinations.length) {
+      queue.currentIndex = 0;
+      await saveAutomationQueue(queue);
+    }
+
+    const item = queue.combinations[queue.currentIndex];
+
+    if (!isGoogleMapsPage()) {
+      // First start from a non-Maps tab: navigate by URL.
+      const fresh = await loadAutomationQueue();
+      if (!fresh || !fresh.running) {
+        st.automationRunning = false;
+        await chrome.storage.local.set({ googlePlacesRunning: false });
+        return { running: false, message: 'Stopped before navigation' };
+      }
+      const targetUrl = buildGoogleMapsSearchUrl(item.keyword, item.location);
+      queue.currentSearchUrl = targetUrl;
+      await saveAutomationQueue(queue);
+      st.automationTimer = setTimeout(async () => {
+        if (!st.automationRunning) return;
+        const fresh = await loadAutomationQueue();
+        if (!fresh || !fresh.running) {
+          st.automationRunning = false;
+          await chrome.storage.local.set({ googlePlacesRunning: false });
+          return;
+        }
+        window.location.href = targetUrl;
+      }, 1500);
+      return { running: true, current: queue.currentIndex + 1, total: queue.combinations.length, message: 'Navigating...' };
+    }
+
+    if (navigationOnly) {
+      return { running: true, current: queue.currentIndex + 1, total: queue.combinations.length, message: 'On correct page' };
+    }
+
+    st.automationRunning = true;
+    stopAutomationTimers();
+
+    const query = normalizeText(`${item.keyword} ${item.location}`);
+    const currentTerm = normalizeText(getCurrentSearchTerm());
+    const targetUrl = buildGoogleMapsSearchUrl(item.keyword, item.location);
+    const alreadyOnSearch = isOnExpectedSearchUrl(targetUrl) || currentTerm === query;
+    const isDetailPage = location.pathname.includes('/maps/place/');
+
+    if (isDetailPage) {
+      // Google redirected the search to a single-place detail URL. We never capture details.
+      // Skip this combination and continue with the next one.
+      return finishCurrentAndAdvance(queue, 'redirected to place detail - skipping');
+    }
+
+    if (alreadyOnSearch) {
+      // Already showing this combination; wait briefly for results to settle then capture.
+      st.automationTimer = setTimeout(async () => {
+        if (!st.automationRunning) return;
+        await waitForSearchResults();
+        if (!st.automationRunning) return;
+        captureAndScrollCurrentSearch();
+      }, 800);
+      let records = 0;
+      try { records = await PlacesDB.count(); } catch (_) {}
+      return { running: true, current: queue.currentIndex + 1, total: queue.combinations.length, totalRecords: records };
+    }
+
+    // Navigate by URL (full page load). A short delay helps avoid bot-throttling.
+    queue.currentSearchUrl = targetUrl;
+    await saveAutomationQueue(queue);
+    st.automationTimer = setTimeout(async () => {
+      if (!st.automationRunning) return;
+      const fresh = await loadAutomationQueue();
+      if (!fresh || !fresh.running) {
+        st.automationRunning = false;
+        await chrome.storage.local.set({ googlePlacesRunning: false });
+        return;
+      }
+      window.location.href = targetUrl;
+    }, 2000);
+
+    let records = 0;
+    try { records = await PlacesDB.count(); } catch (_) {}
+    return { running: true, current: queue.currentIndex + 1, total: queue.combinations.length, totalRecords: records };
+  }
+
+  async function stopAutomation() {
+    const st = state();
+    st.automationRunning = false;
+    stopAutomationTimers();
+    const queue = await loadAutomationQueue();
+    if (queue) {
+      queue.running = false;
+      await saveAutomationQueue(queue);
+    }
     await chrome.storage.local.set({ googlePlacesRunning: false, googlePlacesUpdatedAt: Date.now() });
-    const existing = await chrome.storage.local.get(['googlePlacesData']);
-    return { running: false, total: Array.isArray(existing.googlePlacesData) ? existing.googlePlacesData.length : 0 };
+    let records = 0;
+    try { records = await PlacesDB.count(); } catch (_) {}
+    return { running: false, total: records };
+  }
+
+  async function clearAutomation() {
+    const st = state();
+    st.automationRunning = false;
+    stopAutomationTimers();
+    st.seenIds.clear();
+    st.captures = [];
+    try { await PlacesDB.clear(); } catch(_) {}
+    await chrome.storage.local.set({
+      googlePlacesAutomationQueue: null,
+      googlePlacesProgress: null,
+      googlePlacesRunning: false,
+      googlePlacesUpdatedAt: Date.now()
+    });
+    return { total: 0 };
+  }
+
+  async function resumeAutomationOnLoad() {
+    const st = state();
+    const queue = await loadAutomationQueue();
+    if (!queue || !queue.running) return;
+    st.automationRunning = true;
+    if (isGoogleChallengePage()) {
+      await pauseForChallenge('Google bot challenge detected on load');
+      return;
+    }
+    if (location.pathname.includes('/maps/place/')) {
+      // If Google auto-opened a single-place detail, skip it and move on.
+      await finishCurrentAndAdvance(queue, 'redirected to place detail on load - skipping');
+      return;
+    }
+    await startAutomation(false);
+  }
+
+  async function startCapture() {
+    const st = state();
+    if (st.running) {
+      let records = 0;
+      try { records = await PlacesDB.count(); } catch (_) {}
+      return { running: true, total: records };
+    }
+    st.running = true;
+    await chrome.storage.local.set({ googlePlacesRunning: true, googlePlacesUpdatedAt: Date.now() });
+
+    await runCapturePass();
+    attachAutoCaptureListeners(getListContainer());
+
+    let records = 0;
+    try { records = await PlacesDB.count(); } catch (_) {}
+    return { running: true, total: records };
+  }
+
+  async function stopCapture() {
+    const st = state();
+    st.running = false;
+    if (st.passTimerId) {
+      clearTimeout(st.passTimerId);
+      st.passTimerId = null;
+    }
+    detachAutoCaptureListeners();
+    await chrome.storage.local.set({ googlePlacesRunning: false, googlePlacesUpdatedAt: Date.now() });
+    let records = 0;
+    try { records = await PlacesDB.count(); } catch (_) {}
+    return { running: false, total: records };
   }
 
   async function refreshCapture() {
@@ -499,7 +1024,8 @@
     const st = state();
     st.seenIds.clear();
     st.captures = [];
-    await chrome.storage.local.set({ googlePlacesData: [], googlePlacesUpdatedAt: Date.now() });
+    try { await PlacesDB.clear(); } catch(_) {}
+    await chrome.storage.local.set({ googlePlacesUpdatedAt: Date.now() });
     return { total: 0 };
   }
 
@@ -520,12 +1046,42 @@
       clearCapture().then(sendResponse).catch(err => sendResponse({ error: String(err) }));
       return true;
     }
+    if (request.action === 'googlePlacesAutomationStart') {
+      startAutomation(false).then(sendResponse).catch(err => sendResponse({ error: String(err) }));
+      return true;
+    }
+    if (request.action === 'googlePlacesAutomationStop') {
+      stopAutomation().then(sendResponse).catch(err => sendResponse({ error: String(err) }));
+      return true;
+    }
+    if (request.action === 'googlePlacesAutomationClear') {
+      clearAutomation().then(sendResponse).catch(err => sendResponse({ error: String(err) }));
+      return true;
+    }
     if (request.action === 'googlePlacesStatus') {
-      chrome.storage.local.get(['googlePlacesData', 'googlePlacesRunning']).then((s) => {
+      let sSnapshot = {};
+      chrome.storage.local.get(['googlePlacesRunning', 'googlePlacesAutomationQueue']).then((s) => {
+        sSnapshot = s;
+        return PlacesDB.count();
+      }).then((count) => {
+        const queue = sSnapshot.googlePlacesAutomationQueue;
         sendResponse({
-          running: Boolean(s.googlePlacesRunning),
-          total: Array.isArray(s.googlePlacesData) ? s.googlePlacesData.length : 0,
-          isMaps: isGoogleMapsPage()
+          running: Boolean(sSnapshot.googlePlacesRunning),
+          total: count || 0,
+          isMaps: isGoogleMapsPage(),
+          automationRunning: Boolean(queue && queue.running),
+          automationCurrent: queue ? queue.currentIndex + 1 : 0,
+          automationTotal: queue && queue.combinations ? queue.combinations.length : 0
+        });
+      }).catch(() => {
+        const queue = sSnapshot.googlePlacesAutomationQueue;
+        sendResponse({
+          running: Boolean(sSnapshot.googlePlacesRunning),
+          total: 0,
+          isMaps: isGoogleMapsPage(),
+          automationRunning: Boolean(queue && queue.running),
+          automationCurrent: queue ? queue.currentIndex + 1 : 0,
+          automationTotal: queue && queue.combinations ? queue.combinations.length : 0
         });
       });
       return true;
@@ -533,8 +1089,10 @@
     return false;
   });
 
-  chrome.storage.local.get(['googlePlacesRunning']).then((s) => {
-    if (s.googlePlacesRunning) {
+  chrome.storage.local.get(['googlePlacesRunning', 'googlePlacesAutomationQueue']).then((s) => {
+    if (s.googlePlacesAutomationQueue && s.googlePlacesAutomationQueue.running) {
+      resumeAutomationOnLoad().catch(() => {});
+    } else if (s.googlePlacesRunning) {
       startCapture().catch(() => {});
     }
   }).catch(() => {});

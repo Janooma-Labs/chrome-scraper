@@ -165,6 +165,11 @@
     const texts = extractTextBlocks();
     const all = links.concat(texts);
     const result = await persist(all);
+    chrome.runtime.sendMessage({ action: 'capturedDataUpdated', source: 'generic_capture', total: result.total, added: result.added, updated: result.updated }, () => {
+      if (chrome.runtime.lastError) {
+        // ignore — popup may be closed
+      }
+    });
     return result;
   }
 
@@ -178,9 +183,6 @@
     await chrome.storage.local.set({ genericCaptureRunning: true, genericCapturedUpdatedAt: Date.now() });
     attachListeners();
     await runCapturePass();
-    st.timerId = setInterval(() => {
-      runCapturePass().catch(() => {});
-    }, 1500);
     const existing = await chrome.storage.local.get(['genericCapturedData']);
     return { running: true, total: Array.isArray(existing.genericCapturedData) ? existing.genericCapturedData.length : 0 };
   }
@@ -188,10 +190,6 @@
   async function stopCapture() {
     const st = state();
     st.running = false;
-    if (st.timerId) {
-      clearInterval(st.timerId);
-      st.timerId = null;
-    }
     if (st.passTimerId) {
       clearTimeout(st.passTimerId);
       st.passTimerId = null;

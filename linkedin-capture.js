@@ -353,6 +353,12 @@
       persisted.total = Array.isArray(existing.linkedinCapturedData) ? existing.linkedinCapturedData.length : 0;
     }
 
+    chrome.runtime.sendMessage({ action: 'capturedDataUpdated', source: 'linkedin_companies', total: persisted.total, added: persisted.added, updated: persisted.updated }, () => {
+      if (chrome.runtime.lastError) {
+        // ignore — popup may be closed
+      }
+    });
+
     return persisted;
   }
 
@@ -367,9 +373,6 @@
     await chrome.storage.local.set({ linkedinCaptureRunning: true, linkedinCapturedUpdatedAt: Date.now() });
     attachAutoCapture();
     await runCapturePass();
-    st.timerId = setInterval(() => {
-      runCapturePass().catch(() => {});
-    }, 1500);
     const existing = await chrome.storage.local.get(['linkedinCapturedData']);
     return { running: true, total: Array.isArray(existing.linkedinCapturedData) ? existing.linkedinCapturedData.length : 0 };
   }
@@ -377,10 +380,6 @@
   async function stopCapture() {
     const st = state();
     st.running = false;
-    if (st.timerId) {
-      clearInterval(st.timerId);
-      st.timerId = null;
-    }
     if (st.passTimerId) {
       clearTimeout(st.passTimerId);
       st.passTimerId = null;

@@ -16,6 +16,11 @@ const elements = {
   googleExportXlsxBtn: document.getElementById('google-export-xlsx'),
   googleRecordsCount: document.getElementById('google-records-count'),
   googleInlineStatus: document.getElementById('google-inline-status'),
+  googleKeywordInput: document.getElementById('google-keyword'),
+  googleLocationsInput: document.getElementById('google-locations'),
+  googleProgressWrap: document.getElementById('google-progress-wrap'),
+  googleProgressFill: document.getElementById('google-progress-fill'),
+  googleProgressText: document.getElementById('google-progress-text'),
   placesHelper: document.getElementById('places-helper'),
   googleColumnsBtn: document.getElementById('google-columns-btn'),
   googleColumnsResetBtn: document.getElementById('google-columns-reset'),
@@ -50,6 +55,32 @@ let isMinimized = false;
 let isMaximized = false;
 let placesSelectedColumns = null;
 let showRawPreview = false;
+
+// IndexedDB is scoped to the page origin, so the popup (chrome-extension:// origin)
+// cannot read the DB that a content script on google.com writes. Route all Google
+// Places DB operations through the background service worker instead.
+const PlacesDB = {
+  async getAll() {
+    const res = await chrome.runtime.sendMessage({ action: 'placesDB_getAll' });
+    if (res && res.error) throw new Error(res.error);
+    return res.rows || [];
+  },
+  async count() {
+    const res = await chrome.runtime.sendMessage({ action: 'placesDB_count' });
+    if (res && res.error) throw new Error(res.error);
+    return res.count || 0;
+  },
+  async save(rows) {
+    const res = await chrome.runtime.sendMessage({ action: 'placesDB_save', rows });
+    if (res && res.error) throw new Error(res.error);
+    return { total: res.total || 0, added: res.added || 0, updated: res.updated || 0 };
+  },
+  async clear() {
+    const res = await chrome.runtime.sendMessage({ action: 'placesDB_clear' });
+    if (res && res.error) throw new Error(res.error);
+    return true;
+  }
+};
 
 const DEFAULT_GOOGLE_COLUMNS = [
   'name',
@@ -100,6 +131,12 @@ const DEFAULT_APNA_COLUMNS = [
   'lastActive'
 ];
 
+const DEFAULT_SEARCH_LISTING_COLUMNS = [
+  'name',
+  'url',
+  'source'
+];
+
 const DEFAULT_GENERIC_COLUMNS = [
   'type',
   'text',
@@ -114,12 +151,43 @@ function getDefaultPlacesColumns() {
   if (elements.scraperType.value === 'linkedin') return DEFAULT_LINKEDIN_COLUMNS;
   if (elements.scraperType.value === 'bing_places') return DEFAULT_BING_COLUMNS;
   if (elements.scraperType.value === 'apna') return DEFAULT_APNA_COLUMNS;
+  if (elements.scraperType.value === 'search_listing') return DEFAULT_SEARCH_LISTING_COLUMNS;
   if (elements.scraperType.value === 'generic') return DEFAULT_GENERIC_COLUMNS;
   return DEFAULT_GOOGLE_COLUMNS;
 }
 
 function isCaptureMode() {
-  return isPlacesMode() || elements.scraperType.value === 'generic' || elements.scraperType.value === 'linkedin' || elements.scraperType.value === 'apna';
+  return isPlacesMode() || elements.scraperType.value === 'generic' || elements.scraperType.value === 'linkedin' || elements.scraperType.value === 'apna' || elements.scraperType.value === 'search_listing';
+}
+
+function parseLines(value) {
+  if (!value || typeof value !== 'string') return [];
+  const lines = value.split(/\n|,/);
+  const clean = lines.map(s => s.replace(/^\s*[-•*]\s*/, '').trim()).filter(Boolean);
+  return Array.from(new Set(clean));
+}
+
+function getGoogleAutomationQueue() {
+  const keywords = parseLines(elements.googleKeywordInput.value);
+  const locations = parseLines(elements.googleLocationsInput.value);
+  return { keywords, locations };
+}
+
+function buildGoogleAutomationQueue(existingIndex = 0) {
+  const { keywords, locations } = getGoogleAutomationQueue();
+  const combinations = [];
+  for (const kw of keywords) {
+    for (const loc of locations) {
+      combinations.push({ keyword: kw, location: loc });
+    }
+  }
+  return {
+    running: false,
+    currentIndex: Math.max(0, Math.min(existingIndex, combinations.length)),
+    combinations,
+    recordsCaptured: 0,
+    currentSearchUrl: null
+  };
 }
 
 function isPlacesMode() {
@@ -158,6 +226,23 @@ function getPlacesConfig() {
         clear: 'apnaCaptureClear'
       },
       helperText: 'Open Apna employer search results, start capture, and scroll to collect candidate profiles with phone numbers.'
+    };
+  }
+
+  if (elements.scraperType.value === 'search_listing') {
+    return {
+      label: 'Search Listing',
+      dataKey: 'searchListingData',
+      runningKey: 'searchListingRunning',
+      searchTermKey: 'searchListingSearchTerm',
+      scriptFile: 'search-listing-capture.js',
+      actions: {
+        start: 'searchListingStart',
+        stop: 'searchListingStop',
+        refresh: 'searchListingRefresh',
+        clear: 'searchListingClear'
+      },
+      helperText: 'Open Google, Bing, Yahoo or DuckDuckGo search results, start capture, and scroll or paginate. New listings are captured automatically with URL deduplication.'
     };
   }
 
@@ -321,7 +406,10 @@ async function getExportBaseName() {
   const type = elements.scraperType.value;
 
   if (isCaptureMode()) {
-    const fallback = type === 'bing_places' ? 'bing-places' : (type === 'linkedin' ? 'linkedin-results' : 'google-places');
+    let fallback = 'google-places';
+    if (type === 'bing_places') fallback = 'bing-places';
+    else if (type === 'linkedin') fallback = 'linkedin-results';
+    else if (type === 'search_listing') fallback = 'search-listing-results';
     const fallbackName = type === 'generic' ? 'generic-capture' : fallback;
     const term = slugifyFilePart(state[placesCfg.searchTermKey] || fallbackName);
     return `${term || fallbackName}-${timestampSuffix()}`;
@@ -461,12 +549,22 @@ function updateScraperPanel() {
   }
 }
 
-function setGoogleRunning(running) {
+async function setGoogleRunning(running) {
   elements.googleRunningBadge.textContent = running ? 'Running' : 'Stopped';
   elements.googleRunningBadge.classList.toggle('running', running);
   elements.googleRunningBadge.classList.toggle('stopped', !running);
   elements.googleStartBtn.disabled = running;
   elements.googleStopBtn.disabled = !running;
+
+  if (elements.scraperType.value !== 'google_places') {
+    elements.googleStartBtn.textContent = '▶ Start';
+    return;
+  }
+
+  const saved = await chrome.storage.local.get(['googlePlacesAutomationQueue']);
+  const queue = saved.googlePlacesAutomationQueue;
+  const canResume = queue && queue.combinations && queue.combinations.length && !running && queue.currentIndex < queue.combinations.length;
+  elements.googleStartBtn.textContent = canResume ? '▶ Resume' : '▶ Start';
 }
 
 async function ensurePickerInjected(tabId) {
@@ -632,12 +730,76 @@ async function runGenericScrape(xpath = null) {
   }
 }
 
+function renderProgress(progress) {
+  if (!progress || !progress.total) {
+    elements.googleProgressWrap.classList.add('hidden');
+    return;
+  }
+  elements.googleProgressWrap.classList.remove('hidden');
+  elements.googleProgressFill.style.width = `${progress.percent}%`;
+  elements.googleProgressText.textContent = `${progress.current}/${progress.total} - ${progress.percent}% complete`;
+}
+
+async function loadGoogleAutomationInputs() {
+  if (elements.scraperType.value !== 'google_places') return;
+  const saved = await chrome.storage.local.get([
+    'googlePlacesKeyword',
+    'googlePlacesLocations',
+    'googlePlacesProgress',
+    'googlePlacesAutomationQueue'
+  ]);
+  if (saved.googlePlacesKeyword) {
+    elements.googleKeywordInput.value = saved.googlePlacesKeyword;
+  }
+  if (saved.googlePlacesLocations) {
+    elements.googleLocationsInput.value = saved.googlePlacesLocations;
+  }
+  renderProgress(saved.googlePlacesProgress);
+
+  const queue = saved.googlePlacesAutomationQueue;
+  if (queue && queue.combinations && queue.combinations.length && queue.currentIndex < queue.combinations.length) {
+    elements.googleStartBtn.textContent = queue.running ? '▶ Start' : '▶ Resume';
+  } else {
+    elements.googleStartBtn.textContent = '▶ Start';
+  }
+}
+
 async function loadPlacesData() {
   const cfg = getPlacesConfig();
-  const state = await chrome.storage.local.get([cfg.dataKey, cfg.runningKey]);
-  const rows = Array.isArray(state[cfg.dataKey]) ? state[cfg.dataKey] : [];
+  const state = await chrome.storage.local.get([
+    cfg.dataKey,
+    cfg.runningKey,
+    'googlePlacesProgress',
+    'googlePlacesAutomationQueue'
+  ]);
+
+  let rows = [];
+  if (elements.scraperType.value === 'google_places') {
+    try {
+      rows = await PlacesDB.getAll();
+      // One-time migration from chrome.storage.local (older versions stored here).
+      try {
+        const legacy = await chrome.storage.local.get(['googlePlacesData']);
+        if (Array.isArray(legacy.googlePlacesData) && legacy.googlePlacesData.length) {
+          await PlacesDB.save(legacy.googlePlacesData);
+          await chrome.storage.local.remove(['googlePlacesData']);
+          rows = await PlacesDB.getAll();
+        }
+      } catch (legacyErr) {
+        console.warn('[Popup] Legacy storage migration skipped', legacyErr);
+      }
+    } catch (err) {
+      console.warn('[Popup] Failed to load Google Places DB records', err);
+      rows = [];
+    }
+  } else {
+    rows = Array.isArray(state[cfg.dataKey]) ? state[cfg.dataKey] : [];
+  }
+
   setGoogleRunning(Boolean(state[cfg.runningKey]));
   updatePreview(rows);
+  renderProgress(state.googlePlacesProgress);
+  await loadGoogleAutomationInputs();
   if (!rows.length) {
     setStatus(`No ${cfg.label} data captured yet.`, 'info');
   } else {
@@ -705,12 +867,29 @@ async function sendPlacesAction(action) {
     }
   }
 
-  if (!tab.url || !tab.url.includes('/maps')) {
+  if (elements.scraperType.value === 'search_listing') {
+    try {
+      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['search-listing-capture.js'] });
+      const resListing = await chrome.tabs.sendMessage(tab.id, { action });
+      if (resListing && resListing.error) {
+        setStatus(`${cfg.label} error: ` + resListing.error, 'error');
+        return null;
+      }
+      return resListing;
+    } catch (err) {
+      setStatus('Unable to reach page for Search Listing capture. Refresh and retry.', 'error');
+      return null;
+    }
+  }
+
+  const isAutomationAction = elements.scraperType.value === 'google_places' && action && action.startsWith('googlePlacesAutomation');
+
+  if (!isAutomationAction && (!tab.url || !tab.url.includes('/maps'))) {
     setStatus(`Open ${cfg.label} search results tab first.`, 'error');
     return null;
   }
 
-  if (elements.scraperType.value === 'google_places' && !tab.url.includes('google.')) {
+  if (!isAutomationAction && elements.scraperType.value === 'google_places' && !tab.url.includes('google.')) {
     setStatus('Open Google Maps tab first.', 'error');
     return null;
   }
@@ -740,6 +919,7 @@ async function sendPlacesAction(action) {
 
 elements.scraperType.addEventListener('change', async () => {
   placesSelectedColumns = null;
+  await chrome.storage.local.set({ lastScraperType: elements.scraperType.value });
   updateScraperPanel();
   if (isCaptureMode()) {
     await loadPlacesData();
@@ -785,6 +965,46 @@ elements.cancelPickBtn.addEventListener('click', async () => {
 
 elements.googleStartBtn.addEventListener('click', async () => {
   const cfg = getPlacesConfig();
+
+  if (elements.scraperType.value === 'google_places') {
+    const { keywords, locations } = getGoogleAutomationQueue();
+    if (!keywords.length) {
+      setStatus('Please enter at least one keyword.', 'error');
+      return;
+    }
+    if (!locations.length) {
+      setStatus('Please enter at least one city or state.', 'error');
+      return;
+    }
+
+    setStatus(`Starting ${cfg.label} automation...`, 'info');
+
+    await chrome.storage.local.set({
+      googlePlacesKeyword: elements.googleKeywordInput.value,
+      googlePlacesLocations: elements.googleLocationsInput.value
+    });
+
+    const saved = await chrome.storage.local.get(['googlePlacesAutomationQueue']);
+    const existing = saved.googlePlacesAutomationQueue;
+    let queue;
+    if (existing && existing.combinations && existing.combinations.length && existing.currentIndex < existing.combinations.length) {
+      // Continue the existing queue. Only Reset/Clear wipes it out and starts new.
+      queue = existing;
+      queue.running = true;
+    } else {
+      queue = buildGoogleAutomationQueue(0);
+      queue.running = true;
+    }
+    await chrome.storage.local.set({ googlePlacesAutomationQueue: queue });
+
+    const res = await sendPlacesAction('googlePlacesAutomationStart');
+    if (!res) return;
+    setGoogleRunning(true);
+    await loadPlacesData();
+    setStatus(`Automation running. Search ${queue.currentIndex + 1}/${queue.combinations.length}`, 'success');
+    return;
+  }
+
   setStatus(`Starting ${cfg.label} capture...`, 'info');
   const res = await sendPlacesAction(cfg.actions.start);
   if (!res) return;
@@ -795,7 +1015,10 @@ elements.googleStartBtn.addEventListener('click', async () => {
 
 elements.googleStopBtn.addEventListener('click', async () => {
   const cfg = getPlacesConfig();
-  const res = await sendPlacesAction(cfg.actions.stop);
+  const action = elements.scraperType.value === 'google_places'
+    ? 'googlePlacesAutomationStop'
+    : cfg.actions.stop;
+  const res = await sendPlacesAction(action);
   if (!res) return;
   setGoogleRunning(false);
   await loadPlacesData();
@@ -819,12 +1042,27 @@ elements.googleRefreshBtn.addEventListener('click', async () => {
 
 elements.googleClearBtn.addEventListener('click', async () => {
   const cfg = getPlacesConfig();
-  await chrome.storage.local.set({ [cfg.dataKey]: [], [cfg.runningKey]: false, genericCapturedUpdatedAt: Date.now(), bingPlacesUpdatedAt: Date.now(), googlePlacesUpdatedAt: Date.now() });
-  await sendPlacesAction(cfg.actions.clear);
+  await chrome.storage.local.set({
+    [cfg.dataKey]: [],
+    [cfg.runningKey]: false,
+    genericCapturedUpdatedAt: Date.now(),
+    bingPlacesUpdatedAt: Date.now(),
+    googlePlacesUpdatedAt: Date.now(),
+    googlePlacesAutomationQueue: null,
+    googlePlacesProgress: null
+  });
+  if (elements.scraperType.value === 'google_places') {
+    try { await PlacesDB.clear(); } catch (_) {}
+  }
+  const action = elements.scraperType.value === 'google_places'
+    ? 'googlePlacesAutomationClear'
+    : cfg.actions.clear;
+  await sendPlacesAction(action);
   setGoogleRunning(false);
   updatePreview([]);
   setStatus(`${cfg.label} data cleared.`, 'success');
   renderGoogleColumnsPanel([]);
+  renderProgress(null);
 });
 
 elements.googleColumnsBtn.addEventListener('click', () => {
@@ -987,6 +1225,45 @@ function getExportPayload(rows) {
     return { headers, rows: mapped };
   }
 
+  if (elements.scraperType.value === 'search_listing') {
+    const preferredListing = [
+      { out: 'name', ins: ['name'] },
+      { out: 'url', ins: ['url'] },
+      { out: 'source', ins: ['source'] }
+    ];
+
+    const consumedListing = new Set(preferredListing.flatMap(d => d.ins));
+    const extrasListing = [];
+    const extrasSetListing = new Set();
+
+    const mapped = inputRows.map((row) => {
+      const out = {};
+      for (const def of preferredListing) {
+        let value = '';
+        for (const candidate of def.ins) {
+          if (row[candidate] != null && row[candidate] !== '') {
+            value = row[candidate];
+            break;
+          }
+        }
+        out[def.out] = value;
+      }
+
+      for (const key of Object.keys(row)) {
+        if (consumedListing.has(key)) continue;
+        if (!extrasSetListing.has(key)) {
+          extrasSetListing.add(key);
+          extrasListing.push(key);
+        }
+        out[key] = row[key];
+      }
+      return out;
+    });
+
+    const headers = preferredListing.map(d => d.out).concat(extrasListing);
+    return { headers, rows: mapped };
+  }
+
   if (!isCaptureMode()) {
     const headers = Array.from(new Set(inputRows.flatMap(Object.keys)));
     return { headers, rows: inputRows };
@@ -1057,12 +1334,85 @@ async function checkPickedData() {
   } catch (_) {}
 }
 
-function boot() {
+function scraperTypeMatchesSource(source) {
+  if (elements.scraperType.value === 'google_places' && source === 'google_places') return true;
+  if (elements.scraperType.value === 'bing_places' && source === 'bing_places') return true;
+  if (elements.scraperType.value === 'linkedin' && source === 'linkedin_companies') return true;
+  if (elements.scraperType.value === 'search_listing' && source === 'search_listing') return true;
+  if (elements.scraperType.value === 'apna' && source === 'apna') return true;
+  if (elements.scraperType.value === 'generic' && source === 'generic_capture') return true;
+  return false;
+}
+
+async function saveGoogleAutomationInputs() {
+  const keyword = elements.googleKeywordInput.value;
+  const locations = elements.googleLocationsInput.value;
+  const saved = await chrome.storage.local.get(['googlePlacesAutomationQueue', 'googlePlacesRunning']);
+  const queue = saved.googlePlacesAutomationQueue;
+
+  // If user changes inputs while not running, wipe the old queue/progress so the next Start uses the new values.
+  if (queue && !queue.running && !saved.googlePlacesRunning) {
+    await chrome.storage.local.remove(['googlePlacesAutomationQueue', 'googlePlacesProgress']);
+    elements.googleStartBtn.textContent = '▶ Start';
+    elements.googleProgressWrap.classList.add('hidden');
+  }
+
+  await chrome.storage.local.set({
+    googlePlacesKeyword: keyword,
+    googlePlacesLocations: locations
+  });
+}
+
+if (elements.googleKeywordInput) {
+  elements.googleKeywordInput.addEventListener('input', debounce(saveGoogleAutomationInputs, 400));
+}
+if (elements.googleLocationsInput) {
+  elements.googleLocationsInput.addEventListener('input', debounce(saveGoogleAutomationInputs, 400));
+}
+
+function debounce(fn, wait) {
+  let t;
+  return function (...args) {
+    clearTimeout(t);
+    t = setTimeout(() => fn.apply(this, args), wait);
+  };
+}
+
+chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+  if (request.action === 'capturedDataUpdated') {
+    if (!isCaptureMode()) return;
+    if (!scraperTypeMatchesSource(request.source)) return;
+    loadPlacesData();
+  }
+  if (request.action === 'googlePlacesProgressUpdated') {
+    renderProgress(request.progress);
+  }
+  if (request.action === 'automationComplete') {
+    setStatus('Automation completed all searches.', 'success');
+    setGoogleRunning(false);
+  }
+  if (request.action === 'googlePlacesChallengeDetected') {
+    setStatus(`Google challenge page detected: ${request.reason || ''}. Complete it, then click Resume.`, 'error');
+    setGoogleRunning(false);
+    loadGoogleAutomationInputs();
+  }
+});
+
+async function boot() {
   setupWindowControls();
+
+  // Restore last selected scraper type
+  try {
+    const saved = await chrome.storage.local.get(['lastScraperType']);
+    if (saved.lastScraperType) {
+      elements.scraperType.value = saved.lastScraperType;
+    }
+  } catch (_) {}
+
   updateMode();
   updateScraperPanel();
-  if (isPlacesMode()) {
-    loadPlacesData();
+  if (isCaptureMode()) {
+    await loadPlacesData();
   }
   checkPickedData();
 }

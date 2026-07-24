@@ -135,7 +135,8 @@ section {
   cursor: pointer;
 }
 
-input[type="text"] {
+input[type="text"],
+textarea {
   width: 100%;
   padding: 10px 12px;
   font-size: 13px;
@@ -143,7 +144,66 @@ input[type="text"] {
   border-radius: var(--radius);
   background: var(--card);
   outline: none;
+  font-family: inherit;
+}
+
+input[type="text"] {
   margin-bottom: 8px;
+}
+
+textarea {
+  min-height: 80px;
+  resize: vertical;
+  margin-bottom: 10px;
+}
+
+input[type="text"]:focus,
+textarea:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(37,99,235,0.15);
+}
+
+.automation-panel {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--card);
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+
+.automation-panel .section-label {
+  margin-bottom: 6px;
+  margin-top: 8px;
+}
+
+.automation-panel .section-label:first-of-type {
+  margin-top: 0;
+}
+
+.progress-wrap {
+  margin-top: 8px;
+}
+
+.progress-bar {
+  width: 100%;
+  height: 8px;
+  background: #e2e8f0;
+  border-radius: 999px;
+  overflow: hidden;
+  margin-bottom: 6px;
+}
+
+.progress-fill {
+  height: 100%;
+  background: var(--primary);
+  width: 0%;
+  transition: width 0.3s ease;
+}
+
+.progress-text {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
 }
 
 select {

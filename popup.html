@@ -11,6 +11,7 @@
       <div class="header-row">
         <div class="header-select-wrap">
           <select id="scraper-type">
+            <option value="search_listing">Search Listing</option>
             <option value="google_places" selected>Google Places</option>
             <option value="bing_places">Bing Places</option>
             <option value="linkedin">LinkedIn Scrapper</option>
@@ -34,7 +35,21 @@
         <button id="google-columns-btn" class="icon-btn" title="Choose columns" aria-label="Choose columns">☰ Columns</button>
         <button id="google-columns-reset" class="icon-btn" title="Reset columns" aria-label="Reset columns">↺ Reset</button>
       </div>
-      <p id="places-helper" class="helper-text">Open Google Maps search results, then start capture and scroll to collect more places.</p>
+      <p id="places-helper" class="helper-text">Enter a keyword and a list of cities/states. The scraper will search each combination, scroll to the end, and capture all records.</p>
+
+      <div id="google-automation-panel" class="automation-panel">
+        <label class="section-label" for="google-keyword">Keywords</label>
+        <textarea id="google-keyword" placeholder="Agarbatti Manufacturer&#10;Incense Manufacturer">Agarbatti Manufacturer</textarea>
+
+        <label class="section-label" for="google-locations">Pincodes / Cities / States</label>
+        <textarea id="google-locations" placeholder="400001, 400002&#10;Mumbai&#10;Maharashtra"></textarea>
+
+        <div id="google-progress-wrap" class="progress-wrap hidden">
+          <div class="progress-bar"><div id="google-progress-fill" class="progress-fill"></div></div>
+          <div id="google-progress-text" class="progress-text">0/0 - 0% complete</div>
+        </div>
+      </div>
+
       <div class="google-toolbar">
         <div class="icon-row">
           <button id="google-start-btn" class="icon-btn" title="Start Capture" aria-label="Start Capture">▶ Start</button>

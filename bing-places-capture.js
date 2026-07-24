@@ -349,6 +349,12 @@
       await chrome.storage.local.set({ bingPlacesSearchTerm: searchTerm });
     }
 
+    chrome.runtime.sendMessage({ action: 'capturedDataUpdated', source: 'bing_places', total: persisted.total, added: persisted.added, updated: persisted.updated }, () => {
+      if (chrome.runtime.lastError) {
+        // ignore — popup may be closed
+      }
+    });
+
     return { ...persisted, searchTerm };
   }
 
@@ -363,9 +369,6 @@
     await chrome.storage.local.set({ bingPlacesRunning: true, bingPlacesUpdatedAt: Date.now() });
     await runCapturePass();
     attachAutoCaptureListeners(getListContainer());
-    st.timerId = setInterval(() => {
-      runCapturePass().catch(() => {});
-    }, 1500);
 
     const existing = await chrome.storage.local.get(['bingPlacesData']);
     return { running: true, total: Array.isArray(existing.bingPlacesData) ? existing.bingPlacesData.length : 0 };
@@ -374,10 +377,6 @@
   async function stopCapture() {
     const st = state();
     st.running = false;
-    if (st.timerId) {
-      clearInterval(st.timerId);
-      st.timerId = null;
-    }
     if (st.passTimerId) {
       clearTimeout(st.passTimerId);
       st.passTimerId = null;
